@@ -1,3 +1,5 @@
+import asyncio
+import os.path
 from io import BytesIO
 from pathlib import Path
 
@@ -19,16 +21,19 @@ class ImageEditor:
         self.watermark: Image.Image = Image.open(Path("data") / "logo.png")
 
     async def add_logo(self):
-        for image in self.images:
+        async with asyncio.TaskGroup() as tg:
+            for image in self.images:
+                image.paste(**self._prepare_watermark(image))
+                tg.create_task(self._save_image(image))
 
-            image.paste(**self._prepare_watermark(image))
-            await self._save_image(image)
+    async def rename_images(self, new_name: str = ""):
+        async with asyncio.TaskGroup() as tg:
+            for i, image in enumerate(self.images):
+                image_dir = Path(image.filename).parent
+                _, image_ext = os.path.splitext(image.filename)
 
-    async def rename_images(self):
-        pass
-
-    async def compress_images(self):
-        pass
+                image.filename = image_dir / f"{new_name}{i}{image_ext}"
+                tg.create_task(self._save_image(image))
 
     def _prepare_watermark(self, image: Image.Image) -> WatermarkPasteData:
         transparency_percent = 65
