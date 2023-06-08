@@ -6,6 +6,7 @@ from pathlib import Path
 import aiofiles
 from PIL import Image
 
+from utils import get_image_paths
 from utils.types import WatermarkPasteData
 
 
@@ -17,8 +18,12 @@ class ImageEditor:
     ):
         self.images: list[Image] = [Image.open(path) for path in in_paths]
         self.output_path: Path = Path(out_path)
+        self.buffered_images: list[BytesIO]
+        self._buffer_images()
 
-        self.watermark: Image.Image = Image.open(Path("data") / "logo.png")
+        self.reinit(in_paths, out_path)
+
+        self.watermark: Image.Image = Image.open(Path(__file__).parent / "data" / "logo.png")
 
     async def add_logo(self):
         async with asyncio.TaskGroup() as tg:
@@ -35,11 +40,22 @@ class ImageEditor:
                 image.filename = image_dir / f"{new_name}{i}{image_ext}"
                 tg.create_task(self._save_image(image))
 
+    async def clean_out_folder(self):
+        for path in get_image_paths(self.output_path):
+            os.remove(path)
+
+    def reinit(self, in_paths: list[Path], out_path: str | Path):
+        self.images = [Image.open(path) for path in in_paths]
+        self.output_path = Path(out_path)
+        self._buffer_images()
+
     def _prepare_watermark(self, image: Image.Image) -> WatermarkPasteData:
         transparency_percent = 65
 
         watermark_width = self._calc_watermark_width(image)
-        mask = self.watermark.split()[3].point(lambda i: i * transparency_percent / 100.)
+        mask = self.watermark.split()[3].point(
+            lambda i: i * transparency_percent / 100.
+        )  # splitting to channels and changing the one responsible for the opacity
 
         watermark = self._resize_with_proportion(self.watermark, watermark_width)
         mask = self._resize_with_proportion(mask, watermark_width)
@@ -82,5 +98,20 @@ class ImageEditor:
         image.save(buf := BytesIO(), format="JPEG")
         path = self.output_path / Path(image.filename).name
 
+        await self._write_buffered_image(path, buf)
+
+    @staticmethod
+    async def _write_buffered_image(path: Path, buffer: BytesIO):
         async with aiofiles.open(path, "wb") as file:
-            await file.write(buf.getbuffer())
+            await file.write(buffer.getbuffer())
+
+    def _buffer_images(self):
+        self.buffered_images = []
+
+        for image in self.images:
+            image.save(buf := BytesIO(), format="JPEG")
+            self.buffered_images.append(buf)
+
+    async def restore_buffered_images(self, name: str):
+        for i, buffer in enumerate(self.buffered_images):
+            await self._write_buffered_image(self.output_path / f"{name}{i}.jpeg", buffer)
